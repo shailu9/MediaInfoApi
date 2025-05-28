@@ -20,6 +20,11 @@ def read_item(item_id: int, q: Union[str, None] = None):
 class ProbeRequest(BaseModel):
     url: str
 
+class ProbeResponse(BaseModel):
+    success: bool
+    has_audio: bool | None = None
+    duration: float | None = None
+    error: str | None = None
 
 @app.post("/probe-audio")
 async def probe_audio(req: ProbeRequest):
@@ -46,10 +51,10 @@ async def probe_audio(req: ProbeRequest):
                     duration = float(stream["duration"])
                     break
 
-        return {"success": True, "has_audio": has_audio,"duration": duration}
+        return ProbeResponse(success=True, has_audio=has_audio, duration=duration)
 
     except subprocess.CalledProcessError as e:
-        return {"success": False, "error": "ffprobe failed", "stderr": e.stderr}
+        return ProbeResponse(success=False, error=f"ffprobe failed - {e.stderr}")
 
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return ProbeResponse(success=False, error=str(e))
