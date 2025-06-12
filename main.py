@@ -7,9 +7,15 @@ import os.path
 import urllib.parse
 import re
 from typing import Union
-from fastapi import FastAPI
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, requests
 from pydantic import BaseModel
 from botocore.exceptions import ClientError, NoCredentialsError, EndpointConnectionError
+from botocore.credentials import InstanceMetadataProvider, InstanceMetadataFetcher
+import  requests
+# Load environment variables from .env file
+#load_dotenv()
 
 # Creating the app
 app = FastAPI()
@@ -19,8 +25,10 @@ logging.basicConfig(level = logging.INFO)
 logger = logging.getLogger(__name__)
 
 # AWS setup
-s3_client = boto3.client("s3", region_name="ap-south-1")
-transcribe_client = boto3.client("transcribe", region_name="ap-south-1")
+aws_region = "us-west-2"
+logger.info(aws_region)
+s3_client = boto3.client("s3", region_name = aws_region)
+transcribe_client = boto3.client("transcribe", region_name = aws_region)
 
 # Models
 class ProbeRequest(BaseModel):
@@ -122,8 +130,9 @@ async def extract_audio(req: ExtractAudioRequest) -> ExtractAudioResponse:
         subprocess.run(command, capture_output=True, text=True, check=True)
 
         # Parse bucket name from URL
+        logger.info(f"parsed url - {parsed_url}")
         bucket_name = None
-        if parsed_url.netloc.endswith('.s3.amazonaws.com'):
+        if parsed_url.netloc.endswith(f'.s3.{aws_region}.amazonaws.com'):
             bucket_name = parsed_url.netloc.split('.')[0]
         elif parsed_url.scheme == 's3':
             bucket_name = parsed_url.path.split('/')[1]
@@ -177,6 +186,9 @@ async def extract_audio(req: ExtractAudioRequest) -> ExtractAudioResponse:
 async def transcribe_audio(req: TranscribeAudioRequest) -> TranscribeAudioResponse:
     logger.info(f"Starting transcription for S3 key: {req.audio_key}")
 
+    metadata = get_ecs_credential_metadata()
+    print(json.dumps(metadata, indent=2))
+
     try:
         # Extract asset_id from audio_key (assuming format VOD/FinishedVideos/<asset_id>.mp3)
         file_name = os.path.basename(req.audio_key)
@@ -190,7 +202,7 @@ async def transcribe_audio(req: TranscribeAudioRequest) -> TranscribeAudioRespon
         try:
             s3_client.head_object(Bucket=req.bucket_name, Key=req.audio_key)
         except ClientError as e:
-            logger.error(f"S3 object {req.audio_key} does not exist or is inaccessible: {e}")
+            logger.error(f"S3 object - {req.bucket_name}/{req.audio_key} does not exist or is inaccessible: {e}")
             return TranscribeAudioResponse(success=False, error=f"Invalid or inaccessible audio file: {req.audio_key}")
 
         # Start transcription job
@@ -220,3 +232,15 @@ async def transcribe_audio(req: TranscribeAudioRequest) -> TranscribeAudioRespon
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return TranscribeAudioResponse(success=False, error=f"Unexpected error: {str(e)}")
+
+def get_ecs_credential_metadata():
+    base_url = "http://169.254.170.2"
+    rel_uri = os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+    logger.info(f"rel_url - {rel_uri}")
+    if rel_uri is None:
+        raise EnvironmentError("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI not set.")
+
+    url = base_url + rel_uri
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.json()
